@@ -1,12 +1,14 @@
 import sys
 import argparse
-from matplotlib import lines
 import requests
 import pandas as pd
+from tqdm import tqdm
 
 
 argparser = argparse.ArgumentParser(description="Get PDBID")
 argparser.add_argument("-p", "--PDBID", help="PDBID of the protein")
+argparser.add_argument("-o", "--output", help="Output file name", default="output.csv")
+argparser.add_argument("-c", "--curated", help="Curated output", default=False)
 args = argparser.parse_args()
 
 class Atom:
@@ -16,6 +18,7 @@ class Atom:
         self._parselines()
         self.all_prop = self.__dict__
         self.all_prop.pop("lines")
+        self.resid = ""
     
     def _parselines(self):
         line = self.lines
@@ -35,7 +38,9 @@ class Atom:
         self.element_symbol = line[76:78].strip()
         self.charge = line[78:80].strip()
 
-
+class Residue:
+    def __init__(self, AtomObj:Atom) -> None:
+        self.atom = AtomObj
 
 # Decorator to check if the PDBID is valid
 def ErrorCheck(func):
@@ -50,8 +55,6 @@ def ErrorCheck(func):
 
 
 class Protein:
-    """
-    """
     @ErrorCheck
     def __init__(self, Pdb) -> None:
         self.pdbid = Pdb
@@ -59,20 +62,37 @@ class Protein:
         # from url to list of lines 
         self.pdb = self._pdblines(self.url)
         self.store = self._pdb2atom()
+        
 
     def _pdblines(self, url):
         pdb = requests.get(url).text.split("\n")
         return pdb
     
     def _pdb2atom(self):
+        self.curated_store = {}
+        self.curated_chain = {}
+        self.curated_aminos = {}
         atoms = []
         count = 0
         for line in self.pdb:
             if line.startswith("ATOM") or line.startswith("HETATM"):
-                atoms.append(Atom(count, line))
+                AtomObj = Atom(count, line)
+                atoms.append(AtomObj)
+                residue_id = f"{AtomObj.residue_name}_{AtomObj.residue_serial}_{AtomObj.chain_id}"  # noqa: E501
+                self.curated_store[residue_id] = Residue(AtomObj)
+                if AtomObj.chain_id not in self.curated_chain.keys():
+                    self.curated_chain[AtomObj.chain_id] = []
+                if residue_id not in self.curated_chain[AtomObj.chain_id]:
+                    self.curated_chain[AtomObj.chain_id].append(residue_id)
+                
+                if AtomObj.residue_name not in self.curated_aminos.keys():
+                    self.curated_aminos[AtomObj.residue_name] = []
+                if residue_id not in self.curated_aminos[AtomObj.residue_name]:
+                    self.curated_aminos[AtomObj.residue_name].append(residue_id)
+
                 count += 1
         return atoms
-
+    
 
 
 if __name__ == "__main__":
@@ -82,14 +102,27 @@ if __name__ == "__main__":
         sys.exit(1)
     # print(pp.store[0].all_prop)
     # pp.store to pandas and to csv
-    df = pd.DataFrame([atom.all_prop for atom in pp.store])
-    df.to_csv(f"{pp.pdbid}.csv", index=False)
-    print(f"[INFO]: {pp.pdbid}.csv created.")
+    #df = pd.DataFrame([atom.all_prop for atom in pp.store])
+    #df.to_csv(args.output, index=False)
+    
+    # Use tqdm to show live progress while processing
+    with tqdm(total=len(pp.store), desc="Processing") as pbar:
+        df_data = []
+        for atom in pp.store:
+            df_data.append(atom.all_prop)
+            pbar.update(1)
 
+    df = pd.DataFrame(df_data)
 
- # read csv and convert to mysql db using sqlalchemy
-    # https://stackoverflow.com/questions/23103962/how-to-write-dataframe-to-mysql-table
+    # Use tqdm to show live progress while writing the CSV
+    with tqdm(total=1, desc="Saving CSV") as pbar:
+        df.to_csv(args.output, index=False)
+        pbar.update(1)
+        
+    print(f"[INFO]: {args.output} created.")
+        
+    # if args.curated:
+    #     print(pp.curated_chain.keys())
+    #     print(pp.curated_aminos.keys())
+    #     print(pp.curated_aminos["FE"])
 
-#from sqlalchemy import create_engine  
-#engine = create_engine('mysql://user:pass@localhost/dbname', echo=False)
-#df.to_sql(name='table_name', con=engine, if_exists = 'append', index=False)
